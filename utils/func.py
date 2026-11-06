@@ -2,7 +2,6 @@
 # Licensed under the GNU General Public License v3.0.  
 # See LICENSE file in the repository root for full license text.
 
-import concurrent.futures
 import time
 import os
 import re
@@ -12,6 +11,7 @@ import asyncio
 from datetime import datetime, timedelta
 from motor.motor_asyncio import AsyncIOMotorClient
 from config import MONGO_DB as MONGO_URI, DB_NAME
+from utils.encrypt import ecs
 
 logging.basicConfig(format='%(asctime)s - %(name)s - %(levelname)s - %(message)s', level=logging.INFO)
 logger = logging.getLogger(__name__)
@@ -57,13 +57,20 @@ def hhmmss(seconds):
 
 
 def E(L):   
-    private_match = re.match(r'https://t\.me/c/(\d+)/(?:\d+/)?(\d+)', L)
-    public_match = re.match(r'https://t\.me/([^/]+)/(?:\d+/)?(\d+)', L)
+    link = L.strip()
+    private_match = re.fullmatch(
+        r'(?:https?://)?(?:www\.)?(?:t\.me|telegram\.me)/c/(\d+)/(?:\d+/)?(\d+)(?:\?.*)?',
+        link
+    )
+    public_match = re.fullmatch(
+        r'(?:https?://)?(?:www\.)?(?:t\.me|telegram\.me)/(?:s/)?([A-Za-z0-9_]+)/(?:(\d+)/)?(\d+)(?:\?.*)?',
+        link
+    )
     
     if private_match:
         return f'-100{private_match.group(1)}', int(private_match.group(2)), 'private'
     elif public_match:
-        return public_match.group(1), int(public_match.group(2)), 'public'
+        return public_match.group(1), int(public_match.group(3)), 'public'
     
     return None, None, None
 
@@ -127,10 +134,11 @@ async def get_user_data(user_id):
 
 async def save_user_session(user_id, session_string):
     try:
+        encrypted_session = f"enc:{ecs(session_string)}"
         await users_collection.update_one(
             {"user_id": user_id},
             {"$set": {
-                "session_string": session_string,
+                "session_string": encrypted_session,
                 "updated_at": datetime.now()
             }},
             upsert=True
@@ -157,10 +165,11 @@ async def remove_user_session(user_id):
 
 async def save_user_bot(user_id, bot_token):
     try:
+        encrypted_token = f"enc:{ecs(bot_token)}"
         await users_collection.update_one(
             {"user_id": user_id},
             {"$set": {
-                "bot_token": bot_token,
+                "bot_token": encrypted_token,
                 "updated_at": datetime.now()
             }},
             upsert=True
@@ -242,11 +251,9 @@ async def screenshot(video: str, duration: int, sender: str) -> str | None:
 
 async def get_video_metadata(file_path):
     default_values = {'width': 1, 'height': 1, 'duration': 1}
-    loop = asyncio.get_event_loop()
-    executor = concurrent.futures.ThreadPoolExecutor(max_workers=4)
-    
     try:
         def _extract_metadata():
+            vcap = None
             try:
                 vcap = cv2.VideoCapture(file_path)
                 if not vcap.isOpened():
@@ -264,13 +271,15 @@ async def get_video_metadata(file_path):
                 if duration <= 0:
                     return default_values
 
-                vcap.release()
                 return {'width': width, 'height': height, 'duration': duration}
             except Exception as e:
                 logger.error(f"Error in video_metadata: {e}")
                 return default_values
+            finally:
+                if vcap is not None:
+                    vcap.release()
         
-        return await loop.run_in_executor(executor, _extract_metadata)
+        return await asyncio.to_thread(_extract_metadata)
         
     except Exception as e:
         logger.error(f"Error in get_video_metadata: {e}")
@@ -279,7 +288,17 @@ async def get_video_metadata(file_path):
 
 async def add_premium_user(user_id, duration_value, duration_unit):
     try:
-        now = datetime.now()
+        if duration_value <= 0:
+            return False, "Duration must be greater than zero"
+
+        now = datetime.utcnow()
+        existing = await premium_users_collection.find_one({"user_id": user_id})
+        subscription_start = now
+        if existing:
+            existing_end = existing.get("subscription_end")
+            if existing_end and existing_end > now:
+                now = existing_end
+                subscription_start = existing.get("subscription_start", now)
         expiry_date = None
         
         if duration_unit == "min":
@@ -303,7 +322,7 @@ async def add_premium_user(user_id, duration_value, duration_unit):
             {"user_id": user_id},
             {"$set": {
                 "user_id": user_id,
-                "subscription_start": now,
+                "subscription_start": subscription_start,
                 "subscription_end": expiry_date,
                 "expireAt": expiry_date
             }},
@@ -322,7 +341,7 @@ async def is_premium_user(user_id):
     try:
         user = await premium_users_collection.find_one({"user_id": user_id})
         if user and "subscription_end" in user:
-            now = datetime.now()
+            now = datetime.utcnow()
             return now < user["subscription_end"]
         return False
     except Exception as e:

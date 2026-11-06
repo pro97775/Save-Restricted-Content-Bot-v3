@@ -77,6 +77,8 @@ To run the bot, you'll need to configure a few sensitive variables. Here's how t
 - **`CHANNEL_ID`**: The ID of the channel for forced subscription.
 - **`LOG_GROUP`**: A group or channel where the bot logs messages. Forward a message to [@userinfobot](https://t.me/userinfobot) to get your channel/group ID.
 - **`MONGO_DB`**: A MongoDB URL for storing session data (recommended for security).
+- **`MASTER_KEY`**: A private random secret of at least 32 bytes used to encrypt stored Telegram sessions and custom bot tokens.
+- **`IV_KEY`**: A private random salt of at least 16 bytes used by session encryption. Keep both values outside the repository and retain them securely; changing them makes existing encrypted sessions unavailable.
   
 ### Additional Configuration Options:
 - **`STRING`**: (Optional) Add your **premium account session string** here to allow 4GB file uploads. This is **optional** and can be left empty if not used.
@@ -201,4 +203,3 @@ Visit the [Terms of Use](https://github.com/devgaganin/Save-Restricted-Content-B
 <h3 align="center">
   Developed with ❤️ by <a href="https://t.me/restbots"> Gagan </a>
 </h3>
-

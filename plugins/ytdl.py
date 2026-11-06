@@ -46,7 +46,7 @@ ongoing_downloads = {}
  
 def d_thumbnail(thumbnail_url, save_path):
     try:
-        response = requests.get(thumbnail_url, stream=True)
+        response = requests.get(thumbnail_url, stream=True, timeout=20)
         response.raise_for_status()
         with open(save_path, 'wb') as f:
             for chunk in response.iter_content(chunk_size=8192):
@@ -78,9 +78,10 @@ def get_random_string(length=7):
  
  
 async def process_audio(client, event, url, cookies_env_var=None):
-    cookies = None
-    if cookies_env_var:
-        cookies = cookies_env_var
+    cookies = {
+        "YT_COOKIES": YT_COOKIES,
+        "INSTA_COOKIES": INSTA_COOKIES,
+    }.get(cookies_env_var)
  
     temp_cookie_path = None
     if cookies:
@@ -192,27 +193,28 @@ async def handler(event):
  
  
 async def fetch_video_info(url, ydl_opts, progress_message, check_duration_and_size):
-    with yt_dlp.YoutubeDL(ydl_opts) as ydl:
-        info_dict = ydl.extract_info(url, download=False)
+    def extract_info():
+        with yt_dlp.YoutubeDL(ydl_opts) as ydl:
+            return ydl.extract_info(url, download=False)
+
+    info_dict = await asyncio.to_thread(extract_info)
  
-        if check_duration_and_size:
-             
-            duration = info_dict.get('duration', 0)
-            if duration and duration > 3 * 3600:   
-                await progress_message.edit("**❌ __Video is longer than 3 hours. Download aborted...__**")
-                return None
- 
-             
-            estimated_size = info_dict.get('filesize_approx', 0)
-            if estimated_size and estimated_size > 2 * 1024 * 1024 * 1024:   
-                await progress_message.edit("**🤞 __Video size is larger than 2GB. Aborting download.__**")
-                return None
- 
-        return info_dict
+    if check_duration_and_size:
+        duration = info_dict.get('duration', 0)
+        if duration and duration > 3 * 3600:
+            await progress_message.edit("**❌ __Video is longer than 3 hours. Download aborted...__**")
+            return None
+
+        estimated_size = info_dict.get('filesize_approx', 0)
+        if estimated_size and estimated_size > 2 * 1024 * 1024 * 1024:
+            await progress_message.edit("**🤞 __Video size is larger than 2GB. Aborting download.__**")
+            return None
+
+    return info_dict
  
 def download_video(url, ydl_opts):
     with yt_dlp.YoutubeDL(ydl_opts) as ydl:
-        ydl.download([url])
+        return ydl.extract_info(url, download=True)
  
  
 @client.on(events.NewMessage(pattern="/dl"))
@@ -231,6 +233,7 @@ async def handler(event):
     url = event.message.text.split()[1]
  
      
+    ongoing_downloads[user_id] = True
     try:
         if "instagram.com" in url:
             await process_video(client, event, url, "INSTA_COOKIES", check_duration_and_size=False)
@@ -262,7 +265,7 @@ def progress_callback(done, total, user_id):
     user_data = user_progress[user_id]
  
      
-    percent = (done / total) * 100
+    percent = (done / total) * 100 if total else 0
  
      
     completed_blocks = int(percent // 10)
@@ -277,6 +280,7 @@ def progress_callback(done, total, user_id):
     speed = done - user_data['previous_done']
     elapsed_time = time.time() - user_data['previous_time']
  
+    speed_bps = 0
     if elapsed_time > 0:
         speed_bps = speed / elapsed_time   
         speed_mbps = (speed_bps * 8) / (1024 * 1024)   
@@ -316,13 +320,14 @@ async def process_video(client, event, url, cookies_env_var, check_duration_and_
     start_time = time.time()
     logger.info(f"Received link: {url}")
      
-    cookies = None
-    if cookies_env_var:
-        cookies = cookies_env_var
+    cookies = {
+        "YT_COOKIES": YT_COOKIES,
+        "INSTA_COOKIES": INSTA_COOKIES,
+    }.get(cookies_env_var)
  
      
-    random_filename = get_random_string() + ".mp4"
-    download_path = os.path.abspath(random_filename)
+    random_filename = get_random_string()
+    download_path = os.path.abspath(random_filename + ".%(ext)s")
     logger.info(f"Generated random download path: {download_path}")
  
      
@@ -353,7 +358,14 @@ async def process_video(client, event, url, cookies_env_var, check_duration_and_
         if not info_dict:
             return
          
-        await asyncio.to_thread(download_video, url, ydl_opts)
+        downloaded_info = await asyncio.to_thread(download_video, url, ydl_opts)
+        download_path = downloaded_info.get('_filename') or downloaded_info.get('filepath')
+        if not download_path and downloaded_info.get('requested_downloads'):
+            download_path = downloaded_info['requested_downloads'][0].get('filepath')
+        if not download_path:
+            with yt_dlp.YoutubeDL(ydl_opts) as ydl:
+                download_path = ydl.prepare_filename(downloaded_info)
+        download_path = os.path.abspath(download_path)
         title = info_dict.get('title', 'Powered by Team SPY')
         k = await get_video_metadata(download_path)      
         W = k['width']
@@ -367,10 +379,10 @@ async def process_video(client, event, url, cookies_env_var, check_duration_and_
  
          
         if thumbnail_url:
-            thumbnail_file = os.path.join(tempfile.gettempdir(), get_random_string() + ".jpg")
-            downloaded_thumb = d_thumbnail(thumbnail_url, thumbnail_file)
-            if downloaded_thumb:
-                logger.info(f"Thumbnail saved at: {downloaded_thumb}")
+            thumbnail_path = os.path.join(tempfile.gettempdir(), get_random_string() + ".jpg")
+            thumbnail_file = await asyncio.to_thread(d_thumbnail, thumbnail_url, thumbnail_path)
+            if thumbnail_file:
+                logger.info(f"Thumbnail saved at: {thumbnail_file}")
  
         if thumbnail_file:
             THUMB = thumbnail_file
@@ -378,7 +390,7 @@ async def process_video(client, event, url, cookies_env_var, check_duration_and_
             THUMB = await screenshot(download_path, metadata['duration'], event.sender_id)
 
         chat_id = event.chat_id
-        SIZE = 2 * 1024 * 1024
+        SIZE = 2 * 1024 * 1024 * 1024
         caption = f"{title}"
      
         if os.path.exists(download_path) and os.path.getsize(download_path) > SIZE:
@@ -432,32 +444,37 @@ async def split_and_upload_file(app, sender, file_path, caption):
 
     file_size = os.path.getsize(file_path)
     start = await app.send_message(sender, f"ℹ️ File size: {file_size / (1024 * 1024):.2f} MB")
-    PART_SIZE =  1.9 * 1024 * 1024 * 1024
+    PART_SIZE = int(1.9 * 1024 * 1024 * 1024)
 
     part_number = 0
     async with aiofiles.open(file_path, mode="rb") as f:
         while True:
-            chunk = await f.read(PART_SIZE)
-            if not chunk:
-                break
-
-            # Create part filename
             base_name, file_ext = os.path.splitext(file_path)
             part_file = f"{base_name}.part{str(part_number).zfill(3)}{file_ext}"
-
-            # Write part to file
+            part_size = 0
             async with aiofiles.open(part_file, mode="wb") as part_f:
-                await part_f.write(chunk)
+                while part_size < PART_SIZE:
+                    chunk = await f.read(min(1024 * 1024, PART_SIZE - part_size))
+                    if not chunk:
+                        break
+                    await part_f.write(chunk)
+                    part_size += len(chunk)
+            if not part_size:
+                os.remove(part_file)
+                break
 
             # Uploading part
             edit = await app.send_message(sender, f"⬆️ Uploading part {part_number + 1}...")
             part_caption = f"{caption} \n\n**Part : {part_number + 1}**"
-            await app.send_document(sender, document=part_file, caption=part_caption,
-                progress=progress_bar,
-                progress_args=("╭─────────────────────╮\n│      **__Pyro Uploader__**\n├─────────────────────", edit, time.time())
-            )
-            await edit.delete()
-            os.remove(part_file)
+            try:
+                await app.send_document(sender, document=part_file, caption=part_caption,
+                    progress=progress_bar,
+                    progress_args=("╭─────────────────────╮\n│      **__Pyro Uploader__**\n├─────────────────────", edit, time.time())
+                )
+            finally:
+                await edit.delete()
+                if os.path.exists(part_file):
+                    os.remove(part_file)
 
             part_number += 1
 

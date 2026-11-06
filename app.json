@@ -52,14 +52,14 @@
       "required": true
     },
     "MASTER_KEY": {
-      "description": "Master key used for session encryption",
-      "value": "gK8HzLfT9QpViJcYeB5wRa3DmN7P2xUq",
-      "required": false
+      "description": "Private random secret for encrypting Telegram sessions (at least 32 bytes)",
+      "value": "",
+      "required": true
     },
     "IV_KEY": {
-      "description": "Initialization vector key for decryption",
-      "value": "s7Yx5CpVmE3F",
-      "required": false
+      "description": "Private random salt for Telegram session encryption (at least 16 bytes)",
+      "value": "",
+      "required": true
     },
     "YT_COOKIES": {
       "description": "Cookies for YouTube downloads (in Netscape format)",

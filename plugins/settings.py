@@ -10,7 +10,7 @@ import string
 import random
 from shared_client import client as gf
 from config import OWNER_ID
-from utils.func import get_user_data_key, save_user_data, users_collection
+from utils.func import get_user_data_key, save_user_data, save_user_session, users_collection
 
 VIDEO_EXTENSIONS = {
     'mp4', 'mkv', 'avi', 'mov', 'wmv', 'flv', 'webm',
@@ -23,6 +23,9 @@ active_conversations = {}
 
 @gf.on(events.NewMessage(incoming=True, pattern='/settings'))
 async def settings_command(event):
+    if not event.is_private:
+        await event.respond('Please use /settings in a private chat.')
+        return
     user_id = event.sender_id
     await send_settings_message(event.chat_id, user_id)
 
@@ -57,6 +60,9 @@ async def send_settings_message(chat_id, user_id):
 @gf.on(events.CallbackQuery)
 async def callback_query_handler(event):
     user_id = event.sender_id
+    if event.chat_id != user_id:
+        await event.answer('Please use these settings in a private chat.', alert=True)
+        return
     
     callback_actions = {
         b'setchat': {
@@ -99,6 +105,9 @@ __👉 **Note:** if you are using custom bot then your bot should be admin that 
             {'user_id': user_id},
             {'$unset': {'session_string': ''}}
         )
+        cached_client = UC.pop(user_id, None)
+        if cached_client:
+            await cached_client.stop()
         if result.modified_count > 0:
             await event.respond('Logged out and deleted session successfully.')
         else:
@@ -133,22 +142,33 @@ async def start_conversation(event, user_id, conv_type, prompt_message):
         await event.respond('Previous conversation cancelled. Starting new one.')
     
     msg = await event.respond(f'{prompt_message}\n\n(Send /cancel to cancel this operation)')
-    active_conversations[user_id] = {'type': conv_type, 'message_id': msg.id}
+    active_conversations[user_id] = {
+        'type': conv_type,
+        'message_id': msg.id,
+        'chat_id': event.chat_id,
+    }
 
 @gf.on(events.NewMessage(pattern='/cancel'))
 async def cancel_conversation(event):
     user_id = event.sender_id
-    if user_id in active_conversations:
+    conversation = active_conversations.get(user_id)
+    if conversation and conversation['chat_id'] == event.chat_id and event.is_private:
         await event.respond('Cancelled enjoy baby...')
         del active_conversations[user_id]
 
 @gf.on(events.NewMessage())
 async def handle_conversation_input(event):
     user_id = event.sender_id
-    if user_id not in active_conversations or event.message.text.startswith('/'):
+    conversation = active_conversations.get(user_id)
+    if (not event.is_private or not conversation or
+            conversation['chat_id'] != event.chat_id):
+        return
+    if not event.message.text and not (conversation['type'] == 'setthumb' and event.photo):
+        return
+    if event.message.text and event.message.text.startswith('/'):
         return
         
-    conv_type = active_conversations[user_id]['type']
+    conv_type = conversation['type']
     
     handlers = {
         'setchat': handle_setchat,
@@ -201,7 +221,9 @@ async def handle_setreplacement(event, user_id):
 
 async def handle_addsession(event, user_id):
     session_string = event.text.strip()
-    await save_user_data(user_id, 'session_string', session_string)
+    if not await save_user_session(user_id, session_string):
+        await event.respond('❌ Could not save the encrypted session. Check encryption settings and try again.')
+        return
     await event.respond('✅ Session string added successfully!')
 
 async def handle_deleteword(event, user_id):

@@ -7,6 +7,10 @@ import os as osy
 from config import MASTER_KEY as M1, IV_KEY as I1
 
 def dyk(pwd=M1, slt=I1, l=16):
+    if not pwd or len(pwd.encode()) < 32:
+        raise ValueError("Set MASTER_KEY to a secret of at least 32 bytes")
+    if not slt or len(slt.encode()) < 16:
+        raise ValueError("Set IV_KEY to a random salt of at least 16 bytes")
     pw = pwd.encode()
     sl = slt.encode()
     kdf = PBK(

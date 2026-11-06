@@ -10,7 +10,7 @@ import os
 from config import API_HASH, API_ID
 from shared_client import app as bot
 from utils.func import save_user_session, get_user_data, remove_user_session, save_user_bot, remove_user_bot
-from utils.encrypt import ecs, dcs
+from utils.encrypt import dcs
 from plugins.batch import UB, UC
 from utils.custom_filters import login_in_progress, set_user_step, get_user_step
 logging.basicConfig(level=logging.INFO)
@@ -22,7 +22,7 @@ STEP_CODE = 2
 STEP_PASSWORD = 3
 login_cache = {}
 
-@bot.on_message(filters.command('login'))
+@bot.on_message(filters.command('login') & filters.private)
 async def login_command(client, message):
     user_id = message.from_user.id
     set_user_step(user_id, STEP_PHONE)
@@ -35,7 +35,7 @@ Example: `+12345678900`"""
     login_cache[user_id] = {'status_msg': status_msg}
     
     
-@bot.on_message(filters.command("setbot"))
+@bot.on_message(filters.command("setbot") & filters.private)
 async def set_bot_token(C, m):
     user_id = m.from_user.id
     args = m.text.split(" ", 1)
@@ -61,11 +61,13 @@ async def set_bot_token(C, m):
         return
 
     bot_token = args[1].strip()
-    await save_user_bot(user_id, bot_token)
+    if not await save_user_bot(user_id, bot_token):
+        await m.reply_text("❌ Could not save the bot token. Check encryption settings and try again.", quote=True)
+        return
     await m.reply_text("✅ Bot token saved successfully.", quote=True)
     
     
-@bot.on_message(filters.command("rembot"))
+@bot.on_message(filters.command("rembot") & filters.private)
 async def rem_bot_token(C, m):
     user_id = m.from_user.id
     if user_id in UB:
@@ -146,8 +148,8 @@ Please try again with /login.""")
                 await edit_message_safely(status_msg, '🔄 Verifying code...')
                 await temp_client.sign_in(phone, phone_code_hash, code)
                 session_string = await temp_client.export_session_string()
-                encrypted_session = ecs(session_string)
-                await save_user_session(user_id, encrypted_session)
+                if not await save_user_session(user_id, session_string):
+                    raise RuntimeError("Could not save the encrypted session")
                 await temp_client.disconnect()
                 temp_status_msg = login_cache[user_id]['status_msg']
                 login_cache.pop(user_id, None)
@@ -175,8 +177,8 @@ Please enter your password:"""
                     )
                 await temp_client.check_password(text)
                 session_string = await temp_client.export_session_string()
-                encrypted_session = ecs(session_string)
-                await save_user_session(user_id, encrypted_session)
+                if not await save_user_session(user_id, session_string):
+                    raise RuntimeError("Could not save the encrypted session")
                 await temp_client.disconnect()
                 temp_status_msg = login_cache[user_id]['status_msg']
                 login_cache.pop(user_id, None)
@@ -207,7 +209,7 @@ async def edit_message_safely(message, text):
     except Exception as e:
         logger.error(f'Error editing message: {e}')
         
-@bot.on_message(filters.command('cancel'))
+@bot.on_message(filters.command('cancel') & filters.private)
 async def cancel_command(client, message):
     user_id = message.from_user.id
     await message.delete()
@@ -228,7 +230,7 @@ async def cancel_command(client, message):
         temp_msg = await message.reply('No active login process to cancel.')
         await temp_msg.delete(5)
         
-@bot.on_message(filters.command('logout'))
+@bot.on_message(filters.command('logout') & filters.private)
 async def logout_command(client, message):
     user_id = message.from_user.id
     await message.delete()
@@ -241,7 +243,7 @@ async def logout_command(client, message):
                 '❌ No active session found for your account.')
             return
         encss = session_data['session_string']
-        session_string = dcs(encss)
+        session_string = dcs(encss[4:] if encss.startswith("enc:") else encss)
         temp_client = Client(f'temp_logout_{user_id}', api_id=API_ID,
             api_hash=API_HASH, session_string=session_string)
         try:
@@ -259,6 +261,9 @@ Still removing from database..."""
         finally:
             await temp_client.disconnect()
         await remove_user_session(user_id)
+        cached_client = UC.pop(user_id, None)
+        if cached_client:
+            await cached_client.stop()
         await edit_message_safely(status_msg,
             '✅ Logged out successfully!!')
         try:
@@ -266,16 +271,24 @@ Still removing from database..."""
                 os.remove(f"{user_id}_client.session")
         except Exception:
             pass
-        if UC.get(user_id, None):
-            del UC[user_id]
+        cached_client = UC.pop(user_id, None)
+        if cached_client:
+            try:
+                await cached_client.stop()
+            except Exception:
+                logger.exception('Error stopping cached user client')
     except Exception as e:
         logger.error(f'Error in logout command: {str(e)}')
         try:
             await remove_user_session(user_id)
         except Exception:
             pass
-        if UC.get(user_id, None):
-            del UC[user_id]
+        cached_client = UC.pop(user_id, None)
+        if cached_client:
+            try:
+                await cached_client.stop()
+            except Exception:
+                logger.exception('Error stopping cached user client')
         await edit_message_safely(status_msg,
             f'❌ An error occurred during logout: {str(e)}')
         try:

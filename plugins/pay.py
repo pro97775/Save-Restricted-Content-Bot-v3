@@ -7,7 +7,7 @@ from shared_client import app
 from pyrogram.types import InlineKeyboardButton as B, InlineKeyboardMarkup as M, LabeledPrice as P, PreCheckoutQuery as Q
 from datetime import timedelta as T
 from utils.func import add_premium_user as apu
-from config import P0
+from config import OWNER_ID, P0
 
 @app.on_message(f.command("pay") & f.private)
 async def p(c, m):
@@ -51,6 +51,16 @@ async def i(c, q):
 
 @app.on_pre_checkout_query()
 async def pc(c, q: Q): 
+    try:
+        plan, user_id = q.invoice_payload.split("_", 1)
+        plan_config = P0.get(plan)
+        if (not plan_config or int(user_id) != q.from_user.id or
+                q.currency != "XTR" or q.total_amount != plan_config["s"]):
+            await q.answer(ok=False, error_message="Invalid invoice. Please create a new payment.")
+            return
+    except (ValueError, AttributeError):
+        await q.answer(ok=False, error_message="Invalid invoice. Please create a new payment.")
+        return
     await q.answer(ok=True)
 
 @app.on_message(f.successful_payment)
@@ -71,7 +81,9 @@ async def sp(c, m):
             f"🔖 Txn: `{p.telegram_payment_charge_id}`"
         )
         for o in OWNER_ID:
-            await c.send_message(f"User {u} just purchased the premium, txn id is {p.telegram_payment_charge_id}.")
+            await c.send_message(o,
+                f"User {u} purchased {pi['l']} premium for {p.total_amount} Stars; "
+                f"txn id: {p.telegram_payment_charge_id}.")
     else:
         await m.reply_text(
             f"⚠️ Paid but premium failed.\nTxn `{p.telegram_payment_charge_id}`"
