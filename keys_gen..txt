@@ -1,0 +1,9 @@
+$env:MASTER_KEY = (python -c "import secrets; print(secrets.token_hex(32))")
+$env:IV_KEY = (python -c "import secrets; print(secrets.token_hex(16))")
+
+
+
+print
+
+"MASTER_KEY=$env:MASTER_KEY"
+"IV_KEY=$env:IV_KEY"
