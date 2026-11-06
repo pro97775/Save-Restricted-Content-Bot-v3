@@ -397,6 +397,7 @@ async def process_video(client, event, url, cookies_env_var, check_duration_and_
             prog = await client.send_message(chat_id, "**__Starting Upload...__**")
             await split_and_upload_file(app, chat_id, download_path, caption)
             await prog.delete()
+            return
          
         if os.path.exists(download_path):
             await progress_message.delete()
