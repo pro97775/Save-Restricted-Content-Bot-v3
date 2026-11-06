@@ -1,11 +1,28 @@
 FROM python:3.10-slim
-RUN apt-get update && apt-get install -y git curl ffmpeg python3-pip wget bash && apt-get clean && rm -rf /var/lib/apt/lists/*
-WORKDIR /app
-COPY requirements.txt .
 
-RUN pip3 install wheel
-RUN pip3 install --no-cache-dir -U -r requirements.txt
-COPY . .
+ENV PYTHONDONTWRITEBYTECODE=1 \
+    PYTHONUNBUFFERED=1 \
+    PIP_DISABLE_PIP_VERSION_CHECK=1 \
+    TELETHON_SESSION_PATH=/home/app/telethonbot \
+    TELEGRAM_SESSION_DIR=/home/app
+
+RUN apt-get update \
+    && apt-get install -y --no-install-recommends ca-certificates ffmpeg \
+    && rm -rf /var/lib/apt/lists/*
+
+WORKDIR /app
+
+COPY requirements.txt ./
+RUN python -m pip install --no-cache-dir -r requirements.txt gunicorn supervisor
+
+RUN groupadd --system app \
+    && useradd --system --gid app --create-home --home-dir /home/app app
+
+COPY --chown=app:app . .
+COPY supervisord.conf /etc/supervisor/conf.d/bot.conf
+
+USER app
+
 EXPOSE 5000
 
-CMD flask run -h 0.0.0.0 -p 5000 & python3 main.py
+CMD ["supervisord", "-n", "-c", "/etc/supervisor/conf.d/bot.conf"]
