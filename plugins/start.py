@@ -42,6 +42,7 @@ async def set(_, message):
      
     await app.set_bot_commands([
         BotCommand("start", "🚀 Start the bot"),
+        BotCommand("single", "🔗 Extract a single post"),
         BotCommand("batch", "🫠 Extract in bulk"),
         BotCommand("login", "🔑 Get into the bot"),
         BotCommand("setbot", "🧸 Add your bot for handling files"),

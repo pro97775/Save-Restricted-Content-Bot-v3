@@ -11,7 +11,7 @@ import logging
 import asyncio
 from datetime import datetime, timedelta
 from motor.motor_asyncio import AsyncIOMotorClient
-from config import MONGO_DB as MONGO_URI, DB_NAME
+from config import MONGO_DB as MONGO_URI, DB_NAME, OWNER_ID
 
 logging.basicConfig(format='%(asctime)s - %(name)s - %(levelname)s - %(message)s', level=logging.INFO)
 logger = logging.getLogger(__name__)
@@ -332,7 +332,10 @@ async def add_premium_user(user_id, duration_value, duration_unit):
 
 async def is_premium_user(user_id):
     try:
-        user = await premium_users_collection.find_one({"user_id": int(user_id)})
+        uid = int(user_id)
+        if uid in OWNER_ID:
+            return True
+        user = await premium_users_collection.find_one({"user_id": uid})
         if user and "subscription_end" in user:
             now = datetime.now()
             return now < user["subscription_end"]

@@ -196,8 +196,10 @@ async def get_msg(c, u, i, d, lt):
 
 async def get_ubot(uid):
     bt = await get_user_data_key(uid, "bot_token", None)
-    if not bt: return None
-    if uid in UB: return UB.get(uid)
+    if not bt:
+        return X
+    if uid in UB:
+        return UB.get(uid)
     try:
         bot = Client(f"user_{uid}", bot_token=bt, api_id=API_ID, api_hash=API_HASH)
         await bot.start()
@@ -205,11 +207,11 @@ async def get_ubot(uid):
         return bot
     except Exception as e:
         print(f"Error starting bot for user {uid}: {e}")
-        return None
+        return X
 
 async def get_uclient(uid):
     ud = await get_user_data(uid)
-    ubot = UB.get(uid)
+    ubot = UB.get(uid) or X
     cl = UC.get(uid)
     if cl: return cl
     if not ud: return Y if Y else ubot
@@ -354,7 +356,7 @@ async def process_msg(c, u, m, d, lt, uid, i):
             audio_extensions = ['.mp3', '.wav', '.flac', '.aac', '.ogg', '.wma', '.m4a', '.opus', '.aiff', '.ac3']
             file_ext = os.path.splitext(f)[1].lower()
             
-            if fsize > 2 and Y:
+            if fsize > 2 and Y and LOG_GROUP:
                 st = time.time()
                 await c.edit_message_text(d, p.id, 'File is larger than 2GB. Using alternative method...')
                 await upd_dlg(Y)
@@ -496,10 +498,22 @@ async def text_handler(c, m):
     if not m.from_user:
         return
     uid = m.from_user.id
-    if uid not in Z: return
+    if uid in active_conversations:
+        return
+    if uid not in Z:
+        i, d, lt = E(m.text)
+        if not i or not d:
+            return
+        if FREEMIUM_LIMIT == 0 and not await is_premium_user(uid):
+            await m.reply_text("This bot does not provide free servies, get subscription from OWNER")
+            return
+        if await sub(c, m) == 1:
+            return
+        Z[uid] = {'step': 'start_single'}
+
     s = Z[uid].get('step')
-    x = await get_ubot(uid)
-    if not x:
+    ubot = await get_ubot(uid)
+    if not ubot:
         await m.reply("Add your bot /setbot `token`")
         return
 
@@ -525,15 +539,9 @@ async def text_handler(c, m):
         i, s, lt = Z[uid]['cid'], Z[uid]['sid'], Z[uid]['lt']
         pt = await m.reply_text('Processing...')
         
-        ubot = UB.get(uid)
-        if not ubot:
-            await pt.edit('Add bot with /setbot first')
-            Z.pop(uid, None)
-            return
-        
         uc = await get_uclient(uid)
         if not uc:
-            await pt.edit('Cannot proceed without user client.')
+            await pt.edit('Cannot proceed without user client. Use /login first.')
             Z.pop(uid, None)
             return
             
@@ -548,7 +556,7 @@ async def text_handler(c, m):
                 res = await process_msg(ubot, uc, msg, m.chat.id, lt, uid, i)
                 await pt.edit(f'1/1: {res}')
             else:
-                await pt.edit('Message not found')
+                await pt.edit('Message not found. For private channels, make sure you are logged in (/login) and joined to the channel.')
         except Exception as e:
             await pt.edit(f'Error: {str(e)[:50]}')
         finally:
@@ -575,7 +583,6 @@ async def text_handler(c, m):
 
         pt = await m.reply_text('Processing batch...')
         uc = await get_uclient(uid)
-        ubot = UB.get(uid)
         
         if not uc or not ubot:
             await pt.edit('Missing client setup')

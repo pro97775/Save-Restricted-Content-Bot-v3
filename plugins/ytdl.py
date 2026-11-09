@@ -26,13 +26,13 @@ from shared_client import client, app
 from telethon import events
 from telethon.sync import TelegramClient
 from telethon.tl.types import DocumentAttributeVideo
-from utils.func import get_video_metadata, screenshot
+from utils.func import get_video_metadata, screenshot, E, is_premium_user
 from telethon.tl.functions.messages import EditMessageRequest
 from devgagantools import fast_upload
 from concurrent.futures import ThreadPoolExecutor
 import aiohttp 
 import aiofiles
-from config import YT_COOKIES, INSTA_COOKIES
+from config import YT_COOKIES, INSTA_COOKIES, FREEMIUM_LIMIT
 from mutagen.id3 import ID3, TIT2, TPE1, COMM, APIC
 from mutagen.mp3 import MP3
  
@@ -41,6 +41,39 @@ logger = logging.getLogger(__name__)
  
 thread_pool = ThreadPoolExecutor()
 ongoing_downloads = {}
+
+
+async def _handle_telegram_link(event, url):
+    from plugins.batch import get_ubot, get_uclient, get_msg, process_msg, is_user_active
+    user_id = event.sender_id
+    i, d, lt = E(url)
+    if not i or not d:
+        return False
+
+    if FREEMIUM_LIMIT == 0 and not await is_premium_user(user_id):
+        await event.reply("This bot does not provide free servies, get subscription from OWNER")
+        return True
+
+    if is_user_active(user_id):
+        await event.reply("You have an active task. Use /stop to cancel it.")
+        return True
+
+    pt = await event.reply("Processing Telegram link...")
+    try:
+        ubot = await get_ubot(user_id)
+        uc = await get_uclient(user_id)
+        if not uc:
+            await pt.edit("Cannot proceed without user client. Use /login first.")
+            return True
+        msg = await get_msg(ubot, uc, i, d, lt)
+        if msg:
+            res = await process_msg(ubot, uc, msg, event.chat_id, lt, user_id, i)
+            await pt.edit(f"1/1: {res}")
+        else:
+            await pt.edit("Message not found. For private channels, make sure you are logged in (/login) and joined to the channel.")
+    except Exception as e:
+        await pt.edit(f"Error: {str(e)[:50]}")
+    return True
 
 
 def _get_valid_cookies(cookie_str):
@@ -119,6 +152,9 @@ async def process_audio(client, event, url, cookies_env_var=None):
  
     try:
         info_dict = await extract_audio_async(ydl_opts, url)
+        if not info_dict:
+            await progress_message.edit("**❌ __Failed to extract audio information. Check the link and try again.__**")
+            return
         title = info_dict.get('title', 'Extracted Audio')
  
         await progress_message.edit("**__Editing metadata...__**")
@@ -191,7 +227,9 @@ async def handler(event):
     ongoing_downloads[user_id] = True
  
     try:
-        if "instagram.com" in url:
+        if E(url)[0]:
+            await _handle_telegram_link(event, url)
+        elif "instagram.com" in url:
             await process_audio(client, event, url, cookies_env_var=INSTA_COOKIES)
         elif "youtube.com" in url or "youtu.be" in url:
             await process_audio(client, event, url, cookies_env_var=YT_COOKIES)
@@ -209,6 +247,9 @@ async def fetch_video_info(url, ydl_opts, progress_message, check_duration_and_s
             return ydl.extract_info(url, download=False)
 
     info_dict = await asyncio.to_thread(_extract)
+    if not info_dict:
+        await progress_message.edit("**❌ __Failed to extract video information. Check the link and try again.__**")
+        return None
 
     if check_duration_and_size:
         duration = info_dict.get('duration', 0)
@@ -244,7 +285,9 @@ async def video_dl_handler(event):
     ongoing_downloads[user_id] = True
  
     try:
-        if "instagram.com" in url:
+        if E(url)[0]:
+            await _handle_telegram_link(event, url)
+        elif "instagram.com" in url:
             await process_video(client, event, url, INSTA_COOKIES, check_duration_and_size=False)
         elif "youtube.com" in url or "youtu.be" in url:
             await process_video(client, event, url, YT_COOKIES, check_duration_and_size=True)
