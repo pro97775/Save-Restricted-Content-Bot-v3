@@ -9,16 +9,26 @@ from pyrogram.types import BotCommand, InlineKeyboardButton, InlineKeyboardMarku
 from config import LOG_GROUP, OWNER_ID, FORCE_SUB
 
 async def subscribe(app, message):
+    if not message.from_user:
+        return 1
     if FORCE_SUB:
         try:
-          user = await app.get_chat_member(FORCE_SUB, message.from_user.id)
-          if str(user.status) == "ChatMemberStatus.BANNED":
-              await message.reply_text("You are Banned. Contact -- Team SPY")
-              return 1
+            user = await app.get_chat_member(FORCE_SUB, message.from_user.id)
+            if str(user.status) == "ChatMemberStatus.BANNED":
+                await message.reply_text("You are Banned. Contact -- Team SPY")
+                return 1
         except UserNotParticipant:
             link = await app.export_chat_invite_link(FORCE_SUB)
-            caption = f"Join our channel to use the bot"
-            await message.reply_photo(photo="https://graph.org/file/d44f024a08ded19452152.jpg",caption=caption, reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("Join Now...", url=f"{link}")]]))
+            caption = "Join our channel to use the bot"
+            markup = InlineKeyboardMarkup([[InlineKeyboardButton("Join Now...", url=f"{link}")]])
+            try:
+                await message.reply_photo(
+                    photo="https://graph.org/file/d44f024a08ded19452152.jpg",
+                    caption=caption,
+                    reply_markup=markup
+                )
+            except Exception:
+                await message.reply_text(caption, reply_markup=markup)
             return 1
         except Exception as ggn:
             await message.reply_text(f"Something Went Wrong. Contact admins... with following message {ggn}")
@@ -26,7 +36,7 @@ async def subscribe(app, message):
      
 @app.on_message(filters.command("set"))
 async def set(_, message):
-    if message.from_user.id not in OWNER_ID:
+    if not message.from_user or message.from_user.id not in OWNER_ID:
         await message.reply("You are not authorized to use this command.")
         return
      
@@ -52,8 +62,6 @@ async def set(_, message):
     ])
  
     await message.reply("✅ Commands configured successfully!")
- 
- 
  
  
 help_pages = [
@@ -108,32 +116,35 @@ help_pages = [
 ]
  
  
-async def send_or_edit_help_page(_, message, page_number):
+async def send_or_edit_help_page(_, message, page_number, is_edit=False):
     if page_number < 0 or page_number >= len(help_pages):
         return
  
-     
     prev_button = InlineKeyboardButton("◀️ Previous", callback_data=f"help_prev_{page_number}")
     next_button = InlineKeyboardButton("Next ▶️", callback_data=f"help_next_{page_number}")
  
-     
     buttons = []
     if page_number > 0:
         buttons.append(prev_button)
     if page_number < len(help_pages) - 1:
         buttons.append(next_button)
  
-     
     keyboard = InlineKeyboardMarkup([buttons])
  
-     
-    await message.delete()
- 
-     
-    await message.reply(
-        help_pages[page_number],
-        reply_markup=keyboard
-    )
+    if is_edit:
+        await message.edit_text(
+            help_pages[page_number],
+            reply_markup=keyboard
+        )
+    else:
+        try:
+            await message.delete()
+        except Exception:
+            pass
+        await message.reply(
+            help_pages[page_number],
+            reply_markup=keyboard
+        )
  
  
 @app.on_message(filters.command("help"))
@@ -142,7 +153,7 @@ async def help(client, message):
     if join == 1:
         return
      
-    await send_or_edit_help_page(client, message, 0)
+    await send_or_edit_help_page(client, message, 0, is_edit=False)
  
  
 @app.on_callback_query(filters.regex(r"help_(prev|next)_(\d+)"))
@@ -154,7 +165,7 @@ async def on_help_navigation(client, callback_query):
     elif action == "next":
         page_number += 1
 
-    await send_or_edit_help_page(client, callback_query.message, page_number)
+    await send_or_edit_help_page(client, callback_query.message, page_number, is_edit=True)
      
     await callback_query.answer()
 
@@ -231,5 +242,3 @@ async def see_terms(client, callback_query):
         ]
     )
     await callback_query.message.edit_text(terms_text, reply_markup=buttons)
- 
- 

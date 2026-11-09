@@ -27,6 +27,8 @@ premium_users_collection = db["premium_users"]
 statistics_collection = db["statistics"]
 codedb = db["redeem_code"]
 
+_metadata_executor = concurrent.futures.ThreadPoolExecutor(max_workers=4)
+
 # ------- < start > Session Encoder don't change -------
 
 a1 = "c2F2ZV9yZXN0cmljdGVkX2NvbnRlbnRfYm90cw=="
@@ -45,7 +47,7 @@ a11 = "aHR0cHM6Ly90Lm1lL2tpbmdvZnBhdGFs"
 # ------- < end > Session Encoder don't change --------
 
 def is_private_link(link):
-    return bool(PRIVATE_LINK_PATTERN.match(link))
+    return bool(PRIVATE_LINK_PATTERN.match(link.strip() if link else ""))
 
 
 def thumbnail(sender):
@@ -56,15 +58,21 @@ def hhmmss(seconds):
     return time.strftime('%H:%M:%S', time.gmtime(seconds))
 
 
-def E(L):   
-    private_match = re.match(r'https://t\.me/c/(\d+)/(?:\d+/)?(\d+)', L)
-    public_match = re.match(r'https://t\.me/([^/]+)/(?:\d+/)?(\d+)', L)
-    
+def E(L):
+    if not L:
+        return None, None, None
+    L = L.strip()
+    private_match = re.match(r'https?://(?:t\.me|telegram\.me)/c/(\d+)/(?:\d+/)?(\d+)', L)
+    public_match = re.match(r'https?://(?:t\.me|telegram\.me)/(?:b/)?([^/]+)/(?:\d+/)?(\d+)', L)
+    bot_direct_match = re.match(r'https?://([^/.\s]+)/(\d+)', L)
+
     if private_match:
         return f'-100{private_match.group(1)}', int(private_match.group(2)), 'private'
     elif public_match:
         return public_match.group(1), int(public_match.group(2)), 'public'
-    
+    elif bot_direct_match:
+        return bot_direct_match.group(1), int(bot_direct_match.group(2)), 'public'
+
     return None, None, None
 
 
@@ -103,32 +111,29 @@ async def is_private_chat(event):
 
 async def save_user_data(user_id, key, value):
     await users_collection.update_one(
-        {"user_id": user_id},
+        {"user_id": int(user_id)},
         {"$set": {key: value}},
         upsert=True
     )
-   # print(users_collection)
 
 
 async def get_user_data_key(user_id, key, default=None):
     user_data = await users_collection.find_one({"user_id": int(user_id)})
-  #  print(f"Fetching key '{key}' for user {user_id}: {user_data}")
     return user_data.get(key, default) if user_data else default
 
 
 async def get_user_data(user_id):
     try:
-        user_data = await users_collection.find_one({"user_id": user_id})
+        user_data = await users_collection.find_one({"user_id": int(user_id)})
         return user_data
-    except Exception as e:
-   #     logger.error(f"Error retrieving user data for {user_id}: {e}")
+    except Exception:
         return None
 
 
 async def save_user_session(user_id, session_string):
     try:
         await users_collection.update_one(
-            {"user_id": user_id},
+            {"user_id": int(user_id)},
             {"$set": {
                 "session_string": session_string,
                 "updated_at": datetime.now()
@@ -145,7 +150,7 @@ async def save_user_session(user_id, session_string):
 async def remove_user_session(user_id):
     try:
         await users_collection.update_one(
-            {"user_id": user_id},
+            {"user_id": int(user_id)},
             {"$unset": {"session_string": ""}}
         )
         logger.info(f"Removed session for user {user_id}")
@@ -158,7 +163,7 @@ async def remove_user_session(user_id):
 async def save_user_bot(user_id, bot_token):
     try:
         await users_collection.update_one(
-            {"user_id": user_id},
+            {"user_id": int(user_id)},
             {"$set": {
                 "bot_token": bot_token,
                 "updated_at": datetime.now()
@@ -175,7 +180,7 @@ async def save_user_bot(user_id, bot_token):
 async def remove_user_bot(user_id):
     try:
         await users_collection.update_one(
-            {"user_id": user_id},
+            {"user_id": int(user_id)},
             {"$unset": {"bot_token": ""}}
         )
         logger.info(f"Removed bot token for user {user_id}")
@@ -198,9 +203,12 @@ async def process_text_with_rules(user_id, text):
             processed_text = processed_text.replace(word, replacement)
         
         if delete_words:
-            words = processed_text.split()
-            filtered_words = [w for w in words if w not in delete_words]
-            processed_text = " ".join(filtered_words)
+            lines = processed_text.split("\n")
+            filtered_lines = [
+                " ".join(w for w in line.split() if w not in delete_words)
+                for line in lines
+            ]
+            processed_text = "\n".join(filtered_lines)
         
         return processed_text
     except Exception as e:
@@ -213,8 +221,8 @@ async def screenshot(video: str, duration: int, sender: str) -> str | None:
     if os.path.exists(existing_screenshot):
         return existing_screenshot
 
-    time_stamp = hhmmss(duration // 2)
-    output_file = datetime.now().isoformat("_", "seconds") + ".jpg"
+    time_stamp = hhmmss(int(duration) // 2)
+    output_file = datetime.now().strftime("%Y-%m-%d_%H-%M-%S") + f"_{sender}.jpg"
 
     cmd = [
         "ffmpeg",
@@ -236,17 +244,17 @@ async def screenshot(video: str, duration: int, sender: str) -> str | None:
     if os.path.isfile(output_file):
         return output_file
     else:
-        print(f"FFmpeg Error: {stderr.decode().strip()}")
+        print(f"FFmpeg Error: {stderr.decode(errors='ignore').strip()}")
         return None
 
 
 async def get_video_metadata(file_path):
     default_values = {'width': 1, 'height': 1, 'duration': 1}
     loop = asyncio.get_event_loop()
-    executor = concurrent.futures.ThreadPoolExecutor(max_workers=4)
     
     try:
         def _extract_metadata():
+            vcap = None
             try:
                 vcap = cv2.VideoCapture(file_path)
                 if not vcap.isOpened():
@@ -264,13 +272,15 @@ async def get_video_metadata(file_path):
                 if duration <= 0:
                     return default_values
 
-                vcap.release()
                 return {'width': width, 'height': height, 'duration': duration}
             except Exception as e:
                 logger.error(f"Error in video_metadata: {e}")
                 return default_values
+            finally:
+                if vcap is not None:
+                    vcap.release()
         
-        return await loop.run_in_executor(executor, _extract_metadata)
+        return await loop.run_in_executor(_metadata_executor, _extract_metadata)
         
     except Exception as e:
         logger.error(f"Error in get_video_metadata: {e}")
@@ -279,22 +289,24 @@ async def get_video_metadata(file_path):
 
 async def add_premium_user(user_id, duration_value, duration_unit):
     try:
+        user_id = int(user_id)
         now = datetime.now()
         expiry_date = None
+        unit = duration_unit.lower().strip()
         
-        if duration_unit == "min":
+        if unit in ("min", "mins", "minute", "minutes"):
             expiry_date = now + timedelta(minutes=duration_value)
-        elif duration_unit == "hours":
+        elif unit in ("hour", "hours"):
             expiry_date = now + timedelta(hours=duration_value)
-        elif duration_unit == "days":
+        elif unit in ("day", "days"):
             expiry_date = now + timedelta(days=duration_value)
-        elif duration_unit == "weeks":
+        elif unit in ("week", "weeks"):
             expiry_date = now + timedelta(weeks=duration_value)
-        elif duration_unit == "month":
+        elif unit in ("month", "months"):
             expiry_date = now + timedelta(days=30 * duration_value)
-        elif duration_unit == "year":
+        elif unit in ("year", "years"):
             expiry_date = now + timedelta(days=365 * duration_value)
-        elif duration_unit == "decades":
+        elif unit in ("decade", "decades"):
             expiry_date = now + timedelta(days=3650 * duration_value)
         else:
             return False, "Invalid duration unit"
@@ -320,7 +332,7 @@ async def add_premium_user(user_id, duration_value, duration_unit):
 
 async def is_premium_user(user_id):
     try:
-        user = await premium_users_collection.find_one({"user_id": user_id})
+        user = await premium_users_collection.find_one({"user_id": int(user_id)})
         if user and "subscription_end" in user:
             now = datetime.now()
             return now < user["subscription_end"]
@@ -332,7 +344,7 @@ async def is_premium_user(user_id):
 
 async def get_premium_details(user_id):
     try:
-        user = await premium_users_collection.find_one({"user_id": user_id})
+        user = await premium_users_collection.find_one({"user_id": int(user_id)})
         if user and "subscription_end" in user:
             return user
         return None

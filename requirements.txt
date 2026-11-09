@@ -15,9 +15,8 @@ pytz
 Pillow
 tgcrypto
 flask
-werkzeug==2.2.2
+werkzeug
 mutagen
 yt-dlp
 requests
 cryptography
-

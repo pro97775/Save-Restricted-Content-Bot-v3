@@ -13,7 +13,7 @@ logging.basicConfig(format=
 logger = logging.getLogger('teamspy')
 
 
-@bot_client.on(events.NewMessage(pattern='/status'))
+@bot_client.on(events.NewMessage(pattern=r'^/status(?:\s|$|@)'))
 async def status_handler(event):
     if not await is_private_chat(event):
         await event.respond("This command can only be used in private chats for security reasons.")
@@ -27,7 +27,7 @@ async def status_handler(event):
     bot_active = False
     
     if user_data and "session_string" in user_data:
-            session_active = True
+        session_active = True
     
     # Check if user has a custom bot
     if user_data and "bot_token" in user_data:
@@ -36,7 +36,7 @@ async def status_handler(event):
     # Add premium status check
     premium_status = "❌ Not a premium member"
     premium_details = await get_premium_details(user_id)
-    if premium_details:
+    if premium_details and await is_premium_user(user_id):
         # Convert to IST timezone
         expiry_utc = premium_details["subscription_end"]
         expiry_ist = expiry_utc + timedelta(hours=5, minutes=30)
@@ -46,10 +46,11 @@ async def status_handler(event):
     await event.respond(
         "**Your current status:**\n\n"
         f"**Login Status:** {'✅ Active' if session_active else '❌ Inactive'}\n"
+        f"**Custom Bot:** {'✅ Active' if bot_active else '❌ Inactive'}\n"
         f"**Premium:** {premium_status}"
     )
 
-@bot_client.on(events.NewMessage(pattern='/transfer'))
+@bot_client.on(events.NewMessage(pattern=r'^/transfer(?:\s|$|@)'))
 async def transfer_premium_handler(event):
     if not await is_private_chat(event):
         await event.respond(
@@ -112,11 +113,11 @@ async def transfer_premium_handler(event):
         except Exception as e:
             logger.error(f'Could not notify target user {target_user_id}: {e}')
         try:
-            owner_id = int(OWNER_ID) if isinstance(OWNER_ID, str
-                ) else OWNER_ID[0] if isinstance(OWNER_ID, list) else OWNER_ID
-            await bot_client.send_message(owner_id,
-                f'♻️ Premium Transfer: {sender_name} ({user_id}) has transferred their premium to {target_name} ({target_user_id}). Expiry: {formatted_expiry}'
-                )
+            owners = [int(OWNER_ID)] if isinstance(OWNER_ID, (str, int)) else list(OWNER_ID)
+            for owner_id in owners:
+                await bot_client.send_message(owner_id,
+                    f'♻️ Premium Transfer: {sender_name} ({user_id}) has transferred their premium to {target_name} ({target_user_id}). Expiry: {formatted_expiry}'
+                    )
         except Exception as e:
             logger.error(f'Could not notify owner about premium transfer: {e}')
         return
@@ -126,7 +127,8 @@ async def transfer_premium_handler(event):
             )
         await event.respond(f'❌ Error transferring premium: {str(e)}')
         return
-@bot_client.on(events.NewMessage(pattern='/rem'))
+
+@bot_client.on(events.NewMessage(pattern=r'^/rem(?:\s|$|@)'))
 async def remove_premium_handler(event):
     user_id = event.sender_id
     if not await is_private_chat(event):

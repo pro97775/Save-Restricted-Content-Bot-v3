@@ -5,17 +5,16 @@
 from shared_client import client as bot_client, app
 from telethon import events
 from datetime import timedelta
-from config import OWNER_ID
 from utils.func import add_premium_user, is_private_chat
 from pyrogram import filters
 from pyrogram.types import InlineKeyboardButton as IK, InlineKeyboardMarkup as IKM
-from config import OWNER_ID, JOIN_LINK as JL , ADMIN_CONTACT as AC
+from config import OWNER_ID, JOIN_LINK as JL, ADMIN_CONTACT as AC
 import base64 as spy
 from utils.func import a1, a2, a3, a4, a5, a7, a8, a9, a10, a11
 from plugins.start import subscribe
 
 
-@bot_client.on(events.NewMessage(pattern='/add'))
+@bot_client.on(events.NewMessage(pattern=r'^/add(?:\s|$|@)'))
 async def add_premium_handler(event):
     if not await is_private_chat(event):
         await event.respond(
@@ -28,7 +27,7 @@ async def add_premium_handler(event):
         await event.respond('This command is restricted to the bot owner.')
         return
     text = event.message.text.strip()
-    parts = text.split(' ')
+    parts = text.split()
     if len(parts) != 4:
         await event.respond(
             """Invalid format. Use: /add user_id duration_value duration_unit
@@ -39,11 +38,18 @@ Example: /add 123456 1 week"""
         target_user_id = int(parts[1])
         duration_value = int(parts[2])
         duration_unit = parts[3].lower()
-        valid_units = ['min', 'hours', 'days', 'weeks', 'month', 'year',
-            'decades']
+        valid_units = [
+            'min', 'mins', 'minute', 'minutes',
+            'hour', 'hours',
+            'day', 'days',
+            'week', 'weeks',
+            'month', 'months',
+            'year', 'years',
+            'decade', 'decades',
+        ]
         if duration_unit not in valid_units:
             await event.respond(
-                f"Invalid duration unit. Choose from: {', '.join(valid_units)}"
+                f"Invalid duration unit. Choose from: {', '.join(['min', 'hours', 'days', 'weeks', 'month', 'year', 'decades'])}"
                 )
             return
         success, result = await add_premium_user(target_user_id,
@@ -56,10 +62,13 @@ Example: /add 123456 1 week"""
                 f"""✅ User {target_user_id} added as premium member
 Subscription valid until: {formatted_expiry} (IST)"""
                 )
-            await bot_client.send_message(target_user_id,
-                f"""✅ Your have been added as premium member
+            try:
+                await bot_client.send_message(target_user_id,
+                    f"""✅ You have been added as a premium member
 **Validity upto**: {formatted_expiry} (IST)"""
-                )
+                    )
+            except Exception:
+                pass
         else:
             await event.respond(f'❌ Failed to add premium user: {result}')
     except ValueError:
@@ -85,21 +94,23 @@ async def start_handler(client, message):
     b6 = spy.b64decode(a7).decode()
     b7 = spy.b64decode(a8).decode()
     b8 = spy.b64decode(a9).decode()
-    b9 = spy.b64decode(a10).decode()
-    b10 = spy.b64decode(a11).decode()
-
-    tm = await getattr(app, b3)(b1, b2)
-
-    pb = getattr(tm, spy.b64decode(attr1.encode()).decode())
-    fd = getattr(pb, spy.b64decode(attr2.encode()).decode())
 
     kb = IKM([
         [IK(b7, url=JL)],
         [IK(b8, url=AC)]
     ])
 
-    await getattr(message, b4)(
-        fd,
-        caption=b6,
-        reply_markup=kb
-    )
+    try:
+        tm = await getattr(app, b3)(b1, b2)
+        pb = getattr(tm, spy.b64decode(attr1.encode()).decode())
+        fd = getattr(pb, spy.b64decode(attr2.encode()).decode())
+        await getattr(message, b4)(
+            fd,
+            caption=b6,
+            reply_markup=kb
+        )
+    except Exception:
+        await message.reply_text(
+            b6,
+            reply_markup=kb
+        )

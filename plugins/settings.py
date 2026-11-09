@@ -10,18 +10,36 @@ import string
 import random
 from shared_client import client as gf
 from config import OWNER_ID
-from utils.func import get_user_data_key, save_user_data, users_collection
+from utils.func import get_user_data_key, save_user_data, users_collection, save_user_session, remove_user_session
+from utils.encrypt import ecs
 
 VIDEO_EXTENSIONS = {
     'mp4', 'mkv', 'avi', 'mov', 'wmv', 'flv', 'webm',
-    'mpeg', 'mpg', '3gp'
+    'mpeg', 'mpg', '3gp', 'm4v', 'ogv'
 }
 SET_PIC = 'settings.jpg'
 MESS = 'Customize settings for your files...'
 
 active_conversations = {}
 
-@gf.on(events.NewMessage(incoming=True, pattern='/settings'))
+async def _cleanup_cached_uclient(user_id):
+    try:
+        from plugins.batch import UC
+        if user_id in UC:
+            try:
+                await UC[user_id].stop()
+            except Exception:
+                pass
+            UC.pop(user_id, None)
+    except Exception:
+        pass
+    try:
+        if os.path.exists(f"{user_id}_client.session"):
+            os.remove(f"{user_id}_client.session")
+    except Exception:
+        pass
+
+@gf.on(events.NewMessage(incoming=True, pattern=r'^/settings(?:\s|$|@)'))
 async def settings_command(event):
     user_id = event.sender_id
     await send_settings_message(event.chat_id, user_id)
@@ -92,21 +110,25 @@ __👉 **Note:** if you are using custom bot then your bot should be admin that 
     }
     
     if event.data in callback_actions:
+        await event.answer()
         action = callback_actions[event.data]
         await start_conversation(event, user_id, action['type'], action['message'])
     elif event.data == b'logout':
+        await event.answer()
         result = await users_collection.update_one(
-            {'user_id': user_id},
+            {'user_id': int(user_id)},
             {'$unset': {'session_string': ''}}
         )
+        await _cleanup_cached_uclient(user_id)
         if result.modified_count > 0:
             await event.respond('Logged out and deleted session successfully.')
         else:
             await event.respond('You are not logged in.')
     elif event.data == b'reset':
+        await event.answer()
         try:
             await users_collection.update_one(
-                {'user_id': user_id},
+                {'user_id': int(user_id)},
                 {'$unset': {
                     'delete_words': '',
                     'replacement_words': '',
@@ -122,6 +144,7 @@ __👉 **Note:** if you are using custom bot then your bot should be admin that 
         except Exception as e:
             await event.respond(f'Error resetting settings: {e}')
     elif event.data == b'remthumb':
+        await event.answer()
         try:
             os.remove(f'{user_id}.jpg')
             await event.respond('Thumbnail removed successfully!')
@@ -135,17 +158,18 @@ async def start_conversation(event, user_id, conv_type, prompt_message):
     msg = await event.respond(f'{prompt_message}\n\n(Send /cancel to cancel this operation)')
     active_conversations[user_id] = {'type': conv_type, 'message_id': msg.id}
 
-@gf.on(events.NewMessage(pattern='/cancel'))
+@gf.on(events.NewMessage(incoming=True, pattern=r'^/cancel(?:\s|$|@)'))
 async def cancel_conversation(event):
     user_id = event.sender_id
     if user_id in active_conversations:
         await event.respond('Cancelled enjoy baby...')
         del active_conversations[user_id]
 
-@gf.on(events.NewMessage())
+@gf.on(events.NewMessage(incoming=True))
 async def handle_conversation_input(event):
     user_id = event.sender_id
-    if user_id not in active_conversations or event.message.text.startswith('/'):
+    text = event.message.text or ''
+    if user_id not in active_conversations or text.startswith('/'):
         return
         
     conv_type = active_conversations[user_id]['type']
@@ -168,24 +192,33 @@ async def handle_conversation_input(event):
 
 async def handle_setchat(event, user_id):
     try:
-        chat_id = event.text.strip()
+        chat_id = (event.text or '').strip()
+        if not chat_id:
+            await event.respond('❌ Please provide a valid chat ID.')
+            return
         await save_user_data(user_id, 'chat_id', chat_id)
         await event.respond('✅ Chat ID set successfully!')
     except Exception as e:
         await event.respond(f'❌ Error setting chat ID: {e}')
 
 async def handle_setrename(event, user_id):
-    rename_tag = event.text.strip()
+    rename_tag = (event.text or '').strip()
+    if not rename_tag:
+        await event.respond('❌ Please provide a valid rename tag.')
+        return
     await save_user_data(user_id, 'rename_tag', rename_tag)
     await event.respond(f'✅ Rename tag set to: {rename_tag}')
 
 async def handle_setcaption(event, user_id):
     caption = event.text
+    if not caption:
+        await event.respond('❌ Please provide a valid caption.')
+        return
     await save_user_data(user_id, 'caption', caption)
-    await event.respond(f'✅ Caption set successfully!')
+    await event.respond('✅ Caption set successfully!')
 
 async def handle_setreplacement(event, user_id):
-    match = re.match("'(.+)' '(.+)'", event.text)
+    match = re.match(r"'(.+?)'\s+'(.+?)'", (event.text or '').strip())
     if not match:
         await event.respond("❌ Invalid format. Usage: 'WORD(s)' 'REPLACEWORD'")
     else:
@@ -200,12 +233,20 @@ async def handle_setreplacement(event, user_id):
             await event.respond(f"✅ Replacement saved: '{word}' will be replaced with '{replace_word}'")
 
 async def handle_addsession(event, user_id):
-    session_string = event.text.strip()
-    await save_user_data(user_id, 'session_string', session_string)
+    session_string = (event.text or '').strip()
+    if not session_string:
+        await event.respond('❌ Please send a valid session string.')
+        return
+    encrypted_session = ecs(session_string)
+    await save_user_session(user_id, encrypted_session)
+    await _cleanup_cached_uclient(user_id)
     await event.respond('✅ Session string added successfully!')
 
 async def handle_deleteword(event, user_id):
-    words_to_delete = event.message.text.split()
+    words_to_delete = (event.message.text or '').split()
+    if not words_to_delete:
+        await event.respond('❌ Please provide words to delete.')
+        return
     delete_words = await get_user_data_key(user_id, 'delete_words', [])
     delete_words = list(set(delete_words + words_to_delete))
     await save_user_data(user_id, 'delete_words', delete_words)
@@ -236,21 +277,21 @@ async def rename_file(file, sender, edit):
         custom_rename_tag = await get_user_data_key(sender, 'rename_tag', '')
         replacements = await get_user_data_key(sender, 'replacement_words', {})
         
-        last_dot_index = str(file).rfind('.')
-        if last_dot_index != -1 and last_dot_index != 0:
-            ggn_ext = str(file)[last_dot_index + 1:]
-            if ggn_ext.isalpha() and len(ggn_ext) <= 9:
+        dir_name, base_name = os.path.split(str(file))
+        last_dot_index = base_name.rfind('.')
+        if last_dot_index > 0:
+            ggn_ext = base_name[last_dot_index + 1:]
+            if ggn_ext.isalnum() and len(ggn_ext) <= 9:
+                original_file_name = base_name[:last_dot_index]
                 if ggn_ext.lower() in VIDEO_EXTENSIONS:
-                    original_file_name = str(file)[:last_dot_index]
                     file_extension = 'mp4'
                 else:
-                    original_file_name = str(file)[:last_dot_index]
                     file_extension = ggn_ext
             else:
-                original_file_name = str(file)[:last_dot_index]
+                original_file_name = base_name[:last_dot_index]
                 file_extension = 'mp4'
         else:
-            original_file_name = str(file)
+            original_file_name = base_name
             file_extension = 'mp4'
         
         for word in delete_words:
@@ -259,11 +300,21 @@ async def rename_file(file, sender, edit):
         for word, replace_word in replacements.items():
             original_file_name = original_file_name.replace(word, replace_word)
         
-        new_file_name = f'{original_file_name} {custom_rename_tag}.{file_extension}'
+        original_file_name = re.sub(r'[<>:"/\\|?*]', '_', original_file_name).strip() or "file"
+        clean_tag = re.sub(r'[<>:"/\\|?*]', '_', custom_rename_tag).strip() if custom_rename_tag else ""
         
-        os.rename(file, new_file_name)
+        if clean_tag:
+            new_base_name = f'{original_file_name} {clean_tag}.{file_extension}'
+        else:
+            new_base_name = f'{original_file_name}.{file_extension}'
+        
+        new_file_name = os.path.join(dir_name, new_base_name) if dir_name else new_base_name
+        
+        if new_file_name != str(file):
+            if os.path.exists(new_file_name):
+                os.remove(new_file_name)
+            os.rename(file, new_file_name)
         return new_file_name
     except Exception as e:
         print(f"Rename error: {e}")
         return file
-        

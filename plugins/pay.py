@@ -7,7 +7,7 @@ from shared_client import app
 from pyrogram.types import InlineKeyboardButton as B, InlineKeyboardMarkup as M, LabeledPrice as P, PreCheckoutQuery as Q
 from datetime import timedelta as T
 from utils.func import add_premium_user as apu
-from config import P0
+from config import P0, OWNER_ID
 
 @app.on_message(f.command("pay") & f.private)
 async def p(c, m):
@@ -71,14 +71,18 @@ async def sp(c, m):
             f"🔖 Txn: `{p.telegram_payment_charge_id}`"
         )
         for o in OWNER_ID:
-            await c.send_message(f"User {u} just purchased the premium, txn id is {p.telegram_payment_charge_id}.")
+            try:
+                await c.send_message(o, f"User {u} just purchased the premium, txn id is {p.telegram_payment_charge_id}.")
+            except Exception:
+                pass
     else:
         await m.reply_text(
             f"⚠️ Paid but premium failed.\nTxn `{p.telegram_payment_charge_id}`"
         )
         for o in OWNER_ID:
-            await c.send_message(o,
-                f"⚠️ Issue!\nUser {u}\nPlan {pi['l']}\nTxn {p.telegram_payment_charge_id}\nErr {r}"
-            )
-
-
+            try:
+                await c.send_message(o,
+                    f"⚠️ Issue!\nUser {u}\nPlan {pi['l']}\nTxn {p.telegram_payment_charge_id}\nErr {r}"
+                )
+            except Exception:
+                pass

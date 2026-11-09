@@ -19,18 +19,27 @@ YTUB_COOKIES = """
 # write here yt cookies
 """
 
+def _int_env(key: str, default: int = 0) -> int:
+    val = os.getenv(key, "").strip()
+    if not val:
+        return default
+    try:
+        return int(val)
+    except ValueError:
+        return default
+
 # ─── BOT / DATABASE CONFIG ──────────────────────────────────────────────────────
-API_ID       = os.getenv("API_ID", "")
+API_ID       = _int_env("API_ID", 0) or os.getenv("API_ID", "")
 API_HASH     = os.getenv("API_HASH", "")
 BOT_TOKEN    = os.getenv("BOT_TOKEN", "")
 MONGO_DB     = os.getenv("MONGO_DB", "")
 DB_NAME      = os.getenv("DB_NAME", "telegram_downloader")
 
 # ─── OWNER / CONTROL SETTINGS ───────────────────────────────────────────────────
-OWNER_ID     = list(map(int, os.getenv("OWNER_ID", "").split()))  # space-separated list
-STRING       = os.getenv("STRING", None)  # optional session string
-LOG_GROUP    = int(os.getenv("LOG_GROUP", "-1001234456"))
-FORCE_SUB    = int(os.getenv("FORCE_SUB", "-10012345567"))
+OWNER_ID     = [int(x) for x in os.getenv("OWNER_ID", "").split() if x.lstrip("-").isdigit()]  # space-separated list
+STRING       = os.getenv("STRING", None) or None  # optional session string
+LOG_GROUP    = _int_env("LOG_GROUP", -1001234456)
+FORCE_SUB    = _int_env("FORCE_SUB", -10012345567)
 
 # ─── SECURITY KEYS ──────────────────────────────────────────────────────────────
 MASTER_KEY   = os.getenv("MASTER_KEY", "gK8HzLfT9QpViJcYeB5wRa3DmN7P2xUq")  # session encryption
@@ -41,8 +50,8 @@ YT_COOKIES   = os.getenv("YT_COOKIES", YTUB_COOKIES)
 INSTA_COOKIES = os.getenv("INSTA_COOKIES", INST_COOKIES)
 
 # ─── USAGE LIMITS ───────────────────────────────────────────────────────────────
-FREEMIUM_LIMIT = int(os.getenv("FREEMIUM_LIMIT", "0"))
-PREMIUM_LIMIT  = int(os.getenv("PREMIUM_LIMIT", "500"))
+FREEMIUM_LIMIT = _int_env("FREEMIUM_LIMIT", 0)
+PREMIUM_LIMIT  = _int_env("PREMIUM_LIMIT", 100000000)
 
 # ─── UI / LINKS ─────────────────────────────────────────────────────────────────
 JOIN_LINK     = os.getenv("JOIN_LINK", "https://t.me/team_spy_pro")
@@ -54,20 +63,20 @@ ADMIN_CONTACT = os.getenv("ADMIN_CONTACT", "https://t.me/username_of_admin")
 
 P0 = {
     "d": {
-        "s": int(os.getenv("PLAN_D_S", 1)),
-        "du": int(os.getenv("PLAN_D_DU", 1)),
+        "s": _int_env("PLAN_D_S", 1),
+        "du": _int_env("PLAN_D_DU", 1),
         "u": os.getenv("PLAN_D_U", "days"),
         "l": os.getenv("PLAN_D_L", "Daily"),
     },
     "w": {
-        "s": int(os.getenv("PLAN_W_S", 3)),
-        "du": int(os.getenv("PLAN_W_DU", 1)),
+        "s": _int_env("PLAN_W_S", 3),
+        "du": _int_env("PLAN_W_DU", 1),
         "u": os.getenv("PLAN_W_U", "weeks"),
         "l": os.getenv("PLAN_W_L", "Weekly"),
     },
     "m": {
-        "s": int(os.getenv("PLAN_M_S", 5)),
-        "du": int(os.getenv("PLAN_M_DU", 1)),
+        "s": _int_env("PLAN_M_S", 5),
+        "du": _int_env("PLAN_M_DU", 1),
         "u": os.getenv("PLAN_M_U", "month"),
         "l": os.getenv("PLAN_M_L", "Monthly"),
     },

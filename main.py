@@ -11,7 +11,7 @@ import sys
 async def load_and_run_plugins():
     await start_client()
     plugin_dir = "plugins"
-    plugins = [f[:-3] for f in os.listdir(plugin_dir) if f.endswith(".py") and f != "__init__.py"]
+    plugins = sorted(f[:-3] for f in os.listdir(plugin_dir) if f.endswith(".py") and f != "__init__.py")
 
     for plugin in plugins:
         module = importlib.import_module(f"plugins.{plugin}")
