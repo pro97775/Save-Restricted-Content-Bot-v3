@@ -17,6 +17,8 @@ async def subscribe(app, message):
             if str(user.status) == "ChatMemberStatus.BANNED":
                 await message.reply_text("You are Banned. Contact -- Team SPY")
                 return 1
+            if str(user.status) == "ChatMemberStatus.LEFT":
+                raise UserNotParticipant
         except UserNotParticipant:
             link = await app.export_chat_invite_link(FORCE_SUB)
             caption = "Join our channel to use the bot"

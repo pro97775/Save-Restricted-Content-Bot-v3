@@ -22,6 +22,12 @@ MESS = 'Customize settings for your files...'
 
 active_conversations = {}
 
+def _truncate_utf8(text: str, max_bytes: int) -> str:
+    encoded = text.encode('utf-8')
+    if len(encoded) <= max_bytes:
+        return text
+    return encoded[:max_bytes].decode('utf-8', errors='ignore').strip()
+
 async def _cleanup_cached_uclient(user_id):
     try:
         from plugins.batch import UC
@@ -300,8 +306,9 @@ async def rename_file(file, sender, edit):
         for word, replace_word in replacements.items():
             original_file_name = original_file_name.replace(word, replace_word)
         
-        original_file_name = re.sub(r'[<>:"/\\|?*]', '_', original_file_name).strip() or "file"
-        clean_tag = re.sub(r'[<>:"/\\|?*]', '_', custom_rename_tag).strip() if custom_rename_tag else ""
+        clean_tag = _truncate_utf8(re.sub(r'[<>:"/\\|?*]', '_', custom_rename_tag).strip(), 50) if custom_rename_tag else ""
+        max_base_bytes = 230 - len(clean_tag.encode('utf-8')) - len(file_extension.encode('utf-8'))
+        original_file_name = _truncate_utf8(re.sub(r'[<>:"/\\|?*]', '_', original_file_name).strip(), max(50, max_base_bytes)) or "file"
         
         if clean_tag:
             new_base_name = f'{original_file_name} {clean_tag}.{file_extension}'

@@ -23,9 +23,20 @@ from plugins.start import subscribe as sub
 ACTIVE_USERS = {}
 ACTIVE_USERS_FILE = "active_users.json"
 
-# fixed directory file_name problems 
+DOWNLOADABLE_MEDIA_ATTRS = (
+    "video", "audio", "document", "photo",
+    "voice", "video_note", "sticker", "animation"
+)
+
+# fixed directory file_name problems (preserve extension and respect 255-byte UTF-8 Linux limit)
 def sanitize(filename):
-    return re.sub(r'[<>:"/\\|?*\']', '_', filename).strip(" .")[:255]
+    base, ext = os.path.splitext(str(filename))
+    clean_base = re.sub(r'[<>:"/\\|?*\']', '_', base).strip(" .") or "file"
+    clean_ext = re.sub(r'[<>:"/\\|?*\']', '', ext).strip(" ")[:15]
+    encoded_base = clean_base.encode('utf-8')
+    if len(encoded_base) > 190:
+        clean_base = encoded_base[:190].decode('utf-8', errors='ignore').strip(" .") or "file"
+    return f"{clean_base}{clean_ext}"
 
 def load_active_users():
     try:
@@ -110,7 +121,7 @@ async def get_msg(c, u, i, d, lt):
                 xm = None
                 try:
                     xm = await c.get_messages(i, d)
-                    print(f"fetched by {c.me.username}")
+                    print(f"fetched by {getattr(c.me, 'username', 'bot')}")
                     emp[i] = getattr(xm, "empty", False) if xm else True
                 except Exception:
                     emp[i] = True
@@ -138,11 +149,6 @@ async def get_msg(c, u, i, d, lt):
         else:
             if u:
                 try:
-                    try:
-                        async for _ in u.get_dialogs(limit=50): pass
-                    except Exception:
-                        pass
-                    
                     # Try with -100 prefix first
                     if str(i).startswith('-100'):
                         base_id = str(i)[4:]
@@ -155,7 +161,7 @@ async def get_msg(c, u, i, d, lt):
                         chat_id_100 = i
                         chat_id_dash = i
                     
-                    # Try -100 format first
+                    # Try -100 format first (uses cached peer if already in storage)
                     try:
                         result = await u.get_messages(chat_id_100, d)
                         if result and not getattr(result, "empty", False):
@@ -171,17 +177,22 @@ async def get_msg(c, u, i, d, lt):
                     except Exception:
                         pass
                     
-                    # Final fallback - refresh dialogs and try original
+                    # Peer not yet in storage or message not found: scan dialogs until target chat is found
                     try:
-                        try:
-                            async for _ in u.get_dialogs(limit=200): pass
-                        except Exception:
-                            pass
-                        result = await u.get_messages(chat_id_100, d)
-                        if result and not getattr(result, "empty", False):
-                            return result
+                        target_ids = {chat_id_100, chat_id_dash}
+                        async for dialog in u.get_dialogs():
+                            if dialog.chat and dialog.chat.id in target_ids:
+                                break
                     except Exception:
                         pass
+
+                    for candidate_id in (chat_id_100, chat_id_dash):
+                        try:
+                            result = await u.get_messages(candidate_id, d)
+                            if result and not getattr(result, "empty", False):
+                                return result
+                        except Exception:
+                            pass
                     
                     return None
                             
@@ -257,22 +268,22 @@ async def prog(c, t, C, h, m, st):
 async def send_direct(c, m, tcid, ft=None, rtmid=None):
     try:
         if m.video:
-            await c.send_video(tcid, m.video.file_id, caption=ft, duration=m.video.duration, width=m.video.width, height=m.video.height, reply_to_message_id=rtmid)
+            await c.send_video(tcid, m.video.file_id, caption=ft or '', duration=m.video.duration or 0, width=m.video.width or 0, height=m.video.height or 0, message_thread_id=rtmid)
         elif m.video_note:
-            await c.send_video_note(tcid, m.video_note.file_id, reply_to_message_id=rtmid)
+            await c.send_video_note(tcid, m.video_note.file_id, message_thread_id=rtmid)
         elif m.voice:
-            await c.send_voice(tcid, m.voice.file_id, reply_to_message_id=rtmid)
+            await c.send_voice(tcid, m.voice.file_id, caption=ft or '', message_thread_id=rtmid)
         elif m.sticker:
-            await c.send_sticker(tcid, m.sticker.file_id, reply_to_message_id=rtmid)
+            await c.send_sticker(tcid, m.sticker.file_id, message_thread_id=rtmid)
         elif m.animation:
-            await c.send_animation(tcid, m.animation.file_id, caption=ft, reply_to_message_id=rtmid)
+            await c.send_animation(tcid, m.animation.file_id, caption=ft or '', message_thread_id=rtmid)
         elif m.audio:
-            await c.send_audio(tcid, m.audio.file_id, caption=ft, duration=m.audio.duration, performer=m.audio.performer, title=m.audio.title, reply_to_message_id=rtmid)
+            await c.send_audio(tcid, m.audio.file_id, caption=ft or '', duration=m.audio.duration or 0, performer=m.audio.performer, title=m.audio.title, message_thread_id=rtmid)
         elif m.photo:
             photo_id = m.photo.file_id if hasattr(m.photo, 'file_id') else m.photo[-1].file_id
-            await c.send_photo(tcid, photo_id, caption=ft, reply_to_message_id=rtmid)
+            await c.send_photo(tcid, photo_id, caption=ft or '', message_thread_id=rtmid)
         elif m.document:
-            await c.send_document(tcid, m.document.file_id, caption=ft, file_name=m.document.file_name, reply_to_message_id=rtmid)
+            await c.send_document(tcid, m.document.file_id, caption=ft or '', file_name=m.document.file_name, message_thread_id=rtmid)
         else:
             return False
         return True
@@ -287,9 +298,65 @@ def _cleanup_temp_thumb(th, d):
         except Exception:
             pass
 
+async def _upload_media_with_client(sender_client, m, tcid, f, cap_to_send, th, rtmid, prog_client, d, pid, st, file_ext, video_extensions, audio_extensions):
+    caption_val = cap_to_send or ''
+    if m.video or (m.document and file_ext in video_extensions):
+        mtd = await get_video_metadata(f)
+        dur, h, w = mtd['duration'], mtd['width'], mtd['height']
+        if not th:
+            th = await screenshot(f, dur, d)
+        await sender_client.send_video(
+            tcid, video=f, caption=caption_val,
+            thumb=th, width=w, height=h, duration=dur,
+            progress=prog, progress_args=(prog_client, d, pid, st),
+            message_thread_id=rtmid
+        )
+    elif m.video_note:
+        await sender_client.send_video_note(
+            tcid, video_note=f,
+            progress=prog, progress_args=(prog_client, d, pid, st),
+            message_thread_id=rtmid
+        )
+    elif m.voice:
+        await sender_client.send_voice(
+            tcid, f, caption=caption_val,
+            progress=prog, progress_args=(prog_client, d, pid, st),
+            message_thread_id=rtmid
+        )
+    elif m.sticker:
+        await sender_client.send_sticker(tcid, f, message_thread_id=rtmid)
+    elif m.animation:
+        await sender_client.send_animation(
+            tcid, animation=f, caption=caption_val,
+            progress=prog, progress_args=(prog_client, d, pid, st),
+            message_thread_id=rtmid
+        )
+    elif m.audio or (m.document and file_ext in audio_extensions):
+        await sender_client.send_audio(
+            tcid, audio=f, caption=caption_val,
+            thumb=th, progress=prog, progress_args=(prog_client, d, pid, st),
+            message_thread_id=rtmid
+        )
+    elif m.photo:
+        await sender_client.send_photo(
+            tcid, photo=f, caption=caption_val,
+            progress=prog, progress_args=(prog_client, d, pid, st),
+            message_thread_id=rtmid
+        )
+    else:
+        await sender_client.send_document(
+            tcid, document=f, caption=caption_val,
+            thumb=th, progress=prog, progress_args=(prog_client, d, pid, st),
+            message_thread_id=rtmid
+        )
+    return th
+
 async def process_msg(c, u, m, d, lt, uid, i):
+    f = None
+    th = None
+    p = None
+    d = int(d)
     try:
-        d = int(d)
         cfg_chat = await get_user_data_key(d, 'chat_id', None)
         tcid = d
         rtmid = None
@@ -301,48 +368,45 @@ async def process_msg(c, u, m, d, lt, uid, i):
             else:
                 tcid = int(cfg_chat) if str(cfg_chat).lstrip('-').isdigit() else cfg_chat
         
-        if m.media:
+        has_downloadable_media = any(getattr(m, attr, None) is not None for attr in DOWNLOADABLE_MEDIA_ATTRS)
+
+        if has_downloadable_media:
             orig_text = m.caption.markdown if m.caption else ''
             proc_text = await process_text_with_rules(d, orig_text)
             user_cap = await get_user_data_key(d, 'caption', '')
             ft = f'{proc_text}\n\n{user_cap}' if proc_text and user_cap else user_cap if user_cap else proc_text
             cap_to_send = ft if ft else None
             
-            if lt == 'public' and not emp.get(i, False):
+            if lt == 'public' and not emp.get(i, False) and not getattr(m, 'has_protected_content', False):
                 if await send_direct(c, m, tcid, cap_to_send, rtmid):
+                    return 'Sent directly.'
+                if c is not X and await send_direct(X, m, tcid, cap_to_send, rtmid):
                     return 'Sent directly.'
             
             st = time.time()
-            p = await c.send_message(d, 'Downloading...')
+            p = await X.send_message(d, 'Downloading...')
 
-            c_name = f"{int(time.time())}"
-            if m.video:
-                file_name = m.video.file_name or f"{int(time.time())}.mp4"
-                c_name = sanitize(file_name)
-            elif m.audio:
-                file_name = m.audio.file_name or f"{int(time.time())}.mp3"
-                c_name = sanitize(file_name)
-            elif m.document:
-                file_name = m.document.file_name or f"{int(time.time())}"
-                c_name = sanitize(file_name)
-            elif m.photo:
-                file_name = f"{int(time.time())}.jpg"
-                c_name = sanitize(file_name)
-            elif m.voice:
-                c_name = f"{int(time.time())}.ogg"
-            elif m.video_note:
-                c_name = f"{int(time.time())}.mp4"
-            elif m.animation:
-                file_name = getattr(m.animation, 'file_name', None) or f"{int(time.time())}.mp4"
-                c_name = sanitize(file_name)
+            c_name = None
+            if m.video and m.video.file_name:
+                c_name = sanitize(m.video.file_name)
+            elif m.audio and m.audio.file_name:
+                c_name = sanitize(m.audio.file_name)
+            elif m.document and m.document.file_name:
+                c_name = sanitize(m.document.file_name)
+            elif m.animation and getattr(m.animation, 'file_name', None):
+                c_name = sanitize(m.animation.file_name)
     
-            f = await u.download_media(m, file_name=c_name, progress=prog, progress_args=(c, d, p.id, st))
+            dl_client = getattr(m, '_client', None) or u
+            if c_name:
+                f = await dl_client.download_media(m, file_name=c_name, progress=prog, progress_args=(X, d, p.id, st))
+            else:
+                f = await dl_client.download_media(m, progress=prog, progress_args=(X, d, p.id, st))
             
             if not f:
-                await c.edit_message_text(d, p.id, 'Failed.')
+                await X.edit_message_text(d, p.id, 'Failed.')
                 return 'Failed.'
             
-            await c.edit_message_text(d, p.id, 'Renaming...')
+            await X.edit_message_text(d, p.id, 'Renaming...')
             if (
                 (m.video and m.video.file_name) or
                 (m.audio and m.audio.file_name) or
@@ -358,90 +422,82 @@ async def process_msg(c, u, m, d, lt, uid, i):
             
             if fsize > 2 and Y and LOG_GROUP:
                 st = time.time()
-                await c.edit_message_text(d, p.id, 'File is larger than 2GB. Using alternative method...')
+                await X.edit_message_text(d, p.id, 'File is larger than 2GB. Using alternative method...')
                 await upd_dlg(Y)
-                try:
-                    if m.video or (m.document and file_ext in video_extensions):
-                        mtd = await get_video_metadata(f)
-                        dur, h, w = mtd['duration'], mtd['width'], mtd['height']
-                        th = await screenshot(f, dur, d)
-                        sent = await Y.send_video(
-                            LOG_GROUP, f, thumb=th, duration=dur, height=h, width=w,
-                            caption=cap_to_send, progress=prog, progress_args=(c, d, p.id, st)
-                        )
-                    elif m.audio or (m.document and file_ext in audio_extensions):
-                        sent = await Y.send_audio(
-                            LOG_GROUP, f, thumb=th, caption=cap_to_send,
-                            progress=prog, progress_args=(c, d, p.id, st)
-                        )
-                    else:
-                        sent = await Y.send_document(
-                            LOG_GROUP, f, thumb=th, caption=cap_to_send,
-                            progress=prog, progress_args=(c, d, p.id, st)
-                        )
-                    await c.copy_message(tcid, LOG_GROUP, sent.id, reply_to_message_id=rtmid)
-                finally:
-                    _cleanup_temp_thumb(th, d)
-                    if os.path.exists(f):
-                        os.remove(f)
-                await c.delete_messages(d, p.id)
-                return 'Done (Large file).'
-            
-            await c.edit_message_text(d, p.id, 'Uploading...')
-            st = time.time()
-
-            try:
                 if m.video or (m.document and file_ext in video_extensions):
                     mtd = await get_video_metadata(f)
                     dur, h, w = mtd['duration'], mtd['width'], mtd['height']
                     th = await screenshot(f, dur, d)
-                    await c.send_video(tcid, video=f, caption=cap_to_send, 
-                                    thumb=th, width=w, height=h, duration=dur, 
-                                    progress=prog, progress_args=(c, d, p.id, st), 
-                                    reply_to_message_id=rtmid)
-                elif m.video_note:
-                    await c.send_video_note(tcid, video_note=f, progress=prog, 
-                                        progress_args=(c, d, p.id, st), reply_to_message_id=rtmid)
-                elif m.voice:
-                    await c.send_voice(tcid, f, progress=prog, progress_args=(c, d, p.id, st), 
-                                    reply_to_message_id=rtmid)
-                elif m.sticker:
-                    await c.send_sticker(tcid, f, reply_to_message_id=rtmid)
-                elif m.animation:
-                    await c.send_animation(tcid, animation=f, caption=cap_to_send,
-                                        progress=prog, progress_args=(c, d, p.id, st),
-                                        reply_to_message_id=rtmid)
+                    sent = await Y.send_video(
+                        LOG_GROUP, f, thumb=th, duration=dur, height=h, width=w,
+                        caption=cap_to_send or '', progress=prog, progress_args=(X, d, p.id, st)
+                    )
                 elif m.audio or (m.document and file_ext in audio_extensions):
-                    await c.send_audio(tcid, audio=f, caption=cap_to_send, 
-                                    thumb=th, progress=prog, progress_args=(c, d, p.id, st), 
-                                    reply_to_message_id=rtmid)
-                elif m.photo:
-                    await c.send_photo(tcid, photo=f, caption=cap_to_send, 
-                                    progress=prog, progress_args=(c, d, p.id, st), 
-                                    reply_to_message_id=rtmid)
+                    sent = await Y.send_audio(
+                        LOG_GROUP, f, thumb=th, caption=cap_to_send or '',
+                        progress=prog, progress_args=(X, d, p.id, st)
+                    )
                 else:
-                    await c.send_document(tcid, document=f, caption=cap_to_send, 
-                                        thumb=th, progress=prog, progress_args=(c, d, p.id, st), 
-                                        reply_to_message_id=rtmid)
+                    sent = await Y.send_document(
+                        LOG_GROUP, f, thumb=th, caption=cap_to_send or '',
+                        progress=prog, progress_args=(X, d, p.id, st)
+                    )
+                try:
+                    await c.copy_message(tcid, LOG_GROUP, sent.id, message_thread_id=rtmid)
+                except Exception:
+                    await X.copy_message(tcid, LOG_GROUP, sent.id, message_thread_id=rtmid)
+                await X.delete_messages(d, p.id)
+                return 'Done (Large file).'
+            
+            await X.edit_message_text(d, p.id, 'Uploading...')
+            st = time.time()
+
+            try:
+                try:
+                    th = await _upload_media_with_client(
+                        c, m, tcid, f, cap_to_send, th, rtmid, X, d, p.id, st,
+                        file_ext, video_extensions, audio_extensions
+                    )
+                except Exception as first_err:
+                    if c is not X:
+                        st = time.time()
+                        th = await _upload_media_with_client(
+                            X, m, tcid, f, cap_to_send, th, rtmid, X, d, p.id, st,
+                            file_ext, video_extensions, audio_extensions
+                        )
+                    else:
+                        raise first_err
             except Exception as e:
-                await c.edit_message_text(d, p.id, f'Upload failed: {str(e)[:30]}')
-                _cleanup_temp_thumb(th, d)
-                if os.path.exists(f): os.remove(f)
+                await X.edit_message_text(d, p.id, f'Upload failed: {str(e)[:40]}')
                 return 'Failed.'
             
-            _cleanup_temp_thumb(th, d)
-            if os.path.exists(f):
-                os.remove(f)
-            await c.delete_messages(d, p.id)
-            
+            await X.delete_messages(d, p.id)
             return 'Done.'
             
         elif m.text:
             proc_text = await process_text_with_rules(d, m.text.markdown)
-            await c.send_message(tcid, text=proc_text or m.text.markdown, reply_to_message_id=rtmid)
+            user_cap = await get_user_data_key(d, 'caption', '')
+            base_text = proc_text or m.text.markdown
+            final_text = f'{base_text}\n\n{user_cap}' if base_text and user_cap else base_text
+            try:
+                await c.send_message(tcid, text=final_text, message_thread_id=rtmid)
+            except Exception:
+                if c is not X:
+                    await X.send_message(tcid, text=final_text, message_thread_id=rtmid)
+                else:
+                    raise
             return 'Sent.'
+        else:
+            return 'Unsupported message type.'
     except Exception as e:
         return f'Error: {str(e)[:50]}'
+    finally:
+        _cleanup_temp_thumb(th, d)
+        if f and os.path.exists(f):
+            try:
+                os.remove(f)
+            except Exception:
+                pass
         
 @X.on_message(filters.command(['batch', 'single']) & filters.private)
 async def process_cmd(c, m):
@@ -625,7 +681,8 @@ async def text_handler(c, m):
                     try: await pt.edit(f'{j+1}/{n}: Error - {str(e)[:30]}')
                     except Exception: pass
                 
-                await asyncio.sleep(10)
+                if j + 1 < n:
+                    await asyncio.sleep(10)
             else:
                 await m.reply_text(f'Batch Completed ✅ Success: {success}/{n}')
         

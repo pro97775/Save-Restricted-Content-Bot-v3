@@ -188,12 +188,15 @@ async def process_audio(client, event, url, cookies_env_var=None):
         if os.path.exists(download_path):
             await progress_message.delete()
             prog = await client.send_message(chat_id, "**__Starting Upload...__**")
-            uploaded = await fast_upload(
-                client, download_path, 
-                reply=prog, 
-                name=None,
-                progress_bar_function=lambda done, total: progress_callback(done, total, chat_id)
-            )
+            try:
+                uploaded = await fast_upload(
+                    client, download_path, 
+                    reply=prog, 
+                    name=None,
+                    progress_bar_function=lambda done, total: progress_callback(done, total, chat_id)
+                )
+            except Exception:
+                uploaded = download_path
             await client.send_file(chat_id, uploaded, caption=f"**{title}**\n\n**__Powered by Team SPY__**")
             if prog:
                 await prog.delete()
@@ -378,7 +381,8 @@ async def process_video(client, event, url, cookies_env_var, check_duration_and_
  
     ydl_opts = {
         'outtmpl': download_path,
-        'format': 'best',
+        'format': 'bestvideo[ext=mp4]+bestaudio[ext=m4a]/best[ext=mp4]/best',
+        'merge_output_format': 'mp4',
         'cookiefile': temp_cookie_path if temp_cookie_path else None,
         'writethumbnail': False,
         'verbose': True,
@@ -426,11 +430,14 @@ async def process_video(client, event, url, cookies_env_var, check_duration_and_
         elif os.path.exists(download_path):
             await progress_message.delete()
             prog = await client.send_message(chat_id, "**__Starting Upload...__**")
-            uploaded = await fast_upload(
-                client, download_path,
-                reply=prog,
-                progress_bar_function=lambda done, total: progress_callback(done, total, chat_id)
-            )
+            try:
+                uploaded = await fast_upload(
+                    client, download_path,
+                    reply=prog,
+                    progress_bar_function=lambda done, total: progress_callback(done, total, chat_id)
+                )
+            except Exception:
+                uploaded = download_path
             await client.send_file(
                 event.chat_id,
                 uploaded,
